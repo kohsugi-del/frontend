@@ -1,9 +1,12 @@
 // app/embed/page.tsx
 "use client";
+
+export const dynamic = "force-dynamic";
+
 import { useState } from "react";
 import ChatBubble from "@/components/ChatBubble";
 import TypingDots from "@/components/TypingDots";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient } from "@/lib/supabase";
 
 export default function EmbedPage() {
   const [messages, setMessages] = useState<{role:"user"|"assistant";content:string}[]>([]);
@@ -28,6 +31,7 @@ export default function EmbedPage() {
       }).then((r) => r.json());
 
       const embedding = embedRes?.data?.[0]?.embedding;
+      const supabase = getSupabaseClient();
       const { data } = await supabase.rpc("match_rag_chunks", {
         query_embedding: embedding,
         match_count: 5,

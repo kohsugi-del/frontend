@@ -4,7 +4,7 @@
 export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient } from "@/lib/supabase";
 
 type Row = {
   id: string;
@@ -17,6 +17,7 @@ export default function AdminPage() {
   const [q, setQ] = useState("");
 
   async function load() {
+    const supabase = getSupabaseClient(); // ★ 追加
     const base = supabase.from("rag_chunks").select("id, content, created_at").order("created_at", { ascending: false }).limit(50);
     const { data, error } = q
       ? await base.ilike("content", `%${q}%`)
