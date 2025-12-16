@@ -6,57 +6,43 @@ export const dynamic = "force-dynamic";
 import { useState } from "react";
 import ChatBubble from "@/components/ChatBubble";
 import TypingDots from "@/components/TypingDots";
-import { getSupabaseClient } from "@/lib/supabase";
 
 export default function EmbedPage() {
-  const [messages, setMessages] = useState<{role:"user"|"assistant";content:string}[]>([]);
+  const [messages, setMessages] = useState<
+    { role: "user" | "assistant"; content: string }[]
+  >([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
 
   async function send() {
-    const userMessage = input.trim();
-    if (!userMessage) return;
+    const q = input.trim();
+    if (!q) return;
+
     setInput("");
-    setMessages((m) => [...m, { role: "user", content: userMessage }]);
+    setMessages((m) => [...m, { role: "user", content: q }]);
     setThinking(true);
 
     try {
-      const embedRes = await fetch("https://api.openai.com/v1/embeddings", {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE!;
+      const res = await fetch(`${API_BASE}/embed`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.NEXT_PUBLIC_OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({ model: "text-embedding-3-small", input: userMessage }),
-      }).then((r) => r.json());
-
-      const embedding = embedRes?.data?.[0]?.embedding;
-      const supabase = getSupabaseClient();
-      const { data } = await supabase.rpc("match_rag_chunks", {
-        query_embedding: embedding,
-        match_count: 5,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q }),
       });
-      const context = (Array.isArray(data) ? data : []).map((m: { content: string }) => m.content).join("\n\n");
 
-      const answerRes = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.NEXT_PUBLIC_OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4.1-mini",
-          messages: [
-            { role: "system", content: "あなたは案内チャットボットです。" },
-            { role: "user", content: `資料:\n${context}\n\n質問:${userMessage}` },
-          ],
-        }),
-      }).then((r) => r.json());
+      if (!res.ok) throw new Error("API error");
 
-      const botReply = answerRes?.choices?.[0]?.message?.content ?? "回答に失敗しました。";
-      setMessages((m) => [...m, { role: "assistant", content: botReply }]);
-    } catch {
-      setMessages((m) => [...m, { role: "assistant", content: "エラーが発生しました。" }]);
+      const data = await res.json();
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: data.answer },
+      ]);
+    } catch (e) {
+      console.error(e);
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: "エラーが発生しました。" },
+      ]);
     } finally {
       setThinking(false);
     }
@@ -65,21 +51,31 @@ export default function EmbedPage() {
   return (
     <div className="w-[360px] h-[560px] border rounded-2xl p-3 bg-white flex flex-col">
       <div className="text-sm font-semibold mb-2">サイト案内チャット</div>
+
       <div className="flex-1 overflow-y-auto border rounded-xl p-3 mb-2 bg-gray-50">
         {messages.map((m, i) => (
-          <ChatBubble key={i} role={m.role}>{m.content}</ChatBubble>
+          <ChatBubble key={i} role={m.role}>
+            {m.content}
+          </ChatBubble>
         ))}
-        {thinking && <ChatBubble role="assistant"><TypingDots /></ChatBubble>}
+        {thinking && (
+          <ChatBubble role="assistant">
+            <TypingDots />
+          </ChatBubble>
+        )}
       </div>
+
       <div className="flex gap-2">
         <input
           className="flex-1 border rounded-lg px-3 py-2"
           value={input}
-          onChange={(e)=>setInput(e.target.value)}
-          onKeyDown={(e)=>{ if (e.key==="Enter") send(); }}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder="質問を入力…"
         />
-        <button className="bg-blue-600 text-white px-3 rounded-lg" onClick={send}>送信</button>
+        <button onClick={send} className="bg-blue-600 text-white px-3 rounded-lg">
+          送信
+        </button>
       </div>
     </div>
   );
