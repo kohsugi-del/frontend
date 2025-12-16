@@ -27,7 +27,13 @@ export default function AdminPage() {
     setRows(data || []);
   }
 
-  useEffect(() => { load(); }, []); // 初回読込
+  useEffect(() => {
+  const init = async () => {
+    await load();
+  };
+  init();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   return (
     <div className="max-w-4xl mx-auto p-6">

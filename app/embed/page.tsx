@@ -32,7 +32,7 @@ export default function EmbedPage() {
         query_embedding: embedding,
         match_count: 5,
       });
-      const context = (Array.isArray(data) ? data : []).map((m: any) => m.content).join("\n\n");
+      const context = (Array.isArray(data) ? data : []).map((m: { content: string }) => m.content).join("\n\n");
 
       const answerRes = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",

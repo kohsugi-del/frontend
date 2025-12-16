@@ -1,7 +1,6 @@
 // app/chat/page.tsx
 "use client";
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
 import ChatContainer from "@/components/ChatContainer";
 import ChatBubble from "@/components/ChatBubble";
 import ChatInput from "@/components/ChatInput";
@@ -45,15 +44,16 @@ export default function ChatPage() {
     ...m,
     { role: "assistant", content: botReply },
   ]);
-} catch (e) {
-  console.error(e);
-  setMessages((m) => [
-    ...m,
-    { role: "assistant", content: "エラーが発生しました。" },
-  ]);
-} finally {
-  setThinking(false);
-}
+      } catch (e) {
+        console.error(e);
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: "エラーが発生しました。" },
+        ]);
+      } finally {
+        setThinking(false);
+      }
+  }
 
   return (
     <ChatContainer>
