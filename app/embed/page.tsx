@@ -49,15 +49,31 @@ export default function EmbedPage() {
   }
 
   return (
-    <div className="w-[360px] h-[560px] border rounded-2xl p-3 bg-white flex flex-col">
-      <div className="text-sm font-semibold mb-2">サイト案内チャット</div>
+    <div
+      className="
+        w-[360px]
+        h-[640px]
+        rounded-[28px]
+        bg-[#0B1220]
+        text-white
+        shadow-xl
+        flex flex-col
+        overflow-hidden
+      "
+    >
+      {/* ヘッダー */}
+      <div className="h-12 flex items-center justify-center border-b border-white/10 text-sm font-semibold">
+        AI Assistant
+      </div>
 
-      <div className="flex-1 overflow-y-auto border rounded-xl p-3 mb-2 bg-gray-50">
+      {/* メッセージエリア */}
+      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-2">
         {messages.map((m, i) => (
           <ChatBubble key={i} role={m.role}>
             {m.content}
           </ChatBubble>
         ))}
+
         {thinking && (
           <ChatBubble role="assistant">
             <TypingDots />
@@ -65,16 +81,36 @@ export default function EmbedPage() {
         )}
       </div>
 
-      <div className="flex gap-2">
+      {/* 入力欄 */}
+      <div className="p-3 border-t border-white/10 flex gap-2">
         <input
-          className="flex-1 border rounded-lg px-3 py-2"
+          className="
+            flex-1
+            bg-[#1E293B]
+            text-white
+            placeholder-gray-400
+            rounded-full
+            px-4 py-2
+            text-sm
+            outline-none
+          "
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder="質問を入力…"
         />
-        <button onClick={send} className="bg-blue-600 text-white px-3 rounded-lg">
-          送信
+
+        <button
+          onClick={send}
+          className="
+            w-10 h-10
+            rounded-full
+            bg-blue-600
+            flex items-center justify-center
+            text-white
+          "
+        >
+          ➤
         </button>
       </div>
     </div>
