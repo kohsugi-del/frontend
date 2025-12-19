@@ -5,6 +5,8 @@ import ChatContainer from "@/components/ChatContainer";
 import ChatBubble from "@/components/ChatBubble";
 import ChatInput from "@/components/ChatInput";
 import TypingDots from "@/components/TypingDots";
+import BackButton from "@/components/BackButton";
+
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<{role:"user"|"assistant";content:string}[]>([]);
@@ -57,6 +59,7 @@ export default function ChatPage() {
 
   return (
     <ChatContainer>
+      <BackButton />
       <h1 className="text-xl font-semibold mb-4">チャット</h1>
 
       <div className="min-h-[320px] border rounded-xl p-4 mb-4 bg-white">

@@ -1,153 +1,181 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import StatusBadge from "@/components/StatusBadge";
+import BackButton from "@/components/BackButton";
 
-type CrawlScope = "all" | "single" | "one-level";
+const API = process.env.NEXT_PUBLIC_API_BASE!;
 
 type Site = {
   id: number;
   url: string;
-  scope: CrawlScope;
-  type: "WordPress" | "Headless CMS" | "静的HTML";
+  scope: string;
+  type: string;
+  status: "pending" | "crawling" | "done" | "error";
+  ingested_urls?: number | null;
 };
 
 export default function WebSiteManagePage() {
+  const [sites, setSites] = useState<Site[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // 追加用 state
   const [url, setUrl] = useState("");
-  const [scope, setScope] = useState<CrawlScope>("all");
+  const [scope, setScope] = useState("all");
+  const [type, setType] = useState("静的HTML");
+  const [submitting, setSubmitting] = useState(false);
 
-  const [sites, setSites] = useState<Site[]>([
-    {
-      id: 1,
-      url: "https://my-company.jp",
-      scope: "all",
-      type: "WordPress",
-    },
-    {
-      id: 2,
-      url: "https://api.example.com",
-      scope: "single",
-      type: "Headless CMS",
-    },
-    {
-      id: 3,
-      url: "https://personal-site.net",
-      scope: "one-level",
-      type: "静的HTML",
-    },
-  ]);
+  // 一覧取得
+  const fetchSites = async () => {
+    const res = await fetch(`${API}/sites`);
+    const data = await res.json();
+    setSites(data);
+  };
 
-  const addSite = () => {
+  // Webサイト追加
+  const addSite = async () => {
     if (!url) return;
 
-    setSites((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
+    setSubmitting(true);
+
+    await fetch(`${API}/sites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         url,
         scope,
-        type: "静的HTML",
-      },
-    ]);
+        type,
+      }),
+    });
+
     setUrl("");
+    await fetchSites();
+    setSubmitting(false);
   };
 
-  const removeSite = (id: number) => {
-    setSites((prev) => prev.filter((s) => s.id !== id));
+  // 再クロール
+  const reingest = async (id: number) => {
+    setLoading(true);
+    await fetch(`${API}/sites/${id}/reingest`, { method: "POST" });
+    await fetchSites();
+    setLoading(false);
   };
 
-  const scopeLabel = (scope: CrawlScope) => {
-    switch (scope) {
-      case "all":
-        return "配下の階層すべて";
-      case "single":
-        return "このURLのみ";
-      case "one-level":
-        return "1階層下まで";
-    }
+  useEffect(() => {
+    fetchSites();
+    const timer = setInterval(fetchSites, 5000); // 5秒ポーリング
+    return () => clearInterval(timer);
+  }, []);
+
+  const deleteSite = async (id: number) => {
+    if (!confirm("このWebサイトを削除しますか？")) return;
+
+    setLoading(true);
+    await fetch(`${API}/sites/${id}`, { method: "DELETE" });
+    await fetchSites();
+    setLoading(false);
   };
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-gray-200 p-4">
       <div className="max-w-md mx-auto">
-        {/* Header */}
-        <header className="flex items-center justify-between mb-6">
-          <button className="text-xl"></button>
-          <h1 className="text-lg font-semibold">Webサイトの管理</h1>
-          <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center">
-            👤
-          </div>
-        </header>
+        <BackButton />
 
-        {/* Add new website */}
-        <section className="bg-[#161b22] rounded-2xl p-5 mb-8">
-          <h2 className="text-base font-semibold mb-4">
+        <h1 className="text-lg font-semibold mb-6 text-center">
+          Webサイト管理
+        </h1>
+
+        {/* ===== 新しいWebサイトを追加 ===== */}
+        <div className="bg-[#161b22] rounded-xl p-4 mb-6">
+          <h2 className="text-sm font-semibold mb-3">
             新しいWebサイトを追加
           </h2>
 
-          <label className="block mb-3">
-            <span className="text-sm text-gray-400">URL</span>
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://example.com"
-              className="mt-1 w-full rounded-lg bg-[#0d1117] border border-gray-700 px-3 py-2 text-sm"
-            />
-          </label>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://example.com/"
+            className="w-full mb-2 rounded bg-[#0d1117] border border-gray-700 px-3 py-2 text-sm"
+          />
 
-          <label className="block mb-4">
-            <span className="text-sm text-gray-400">クロール範囲</span>
+          <div className="flex gap-2 mb-3">
             <select
               value={scope}
-              onChange={(e) => setScope(e.target.value as CrawlScope)}
-              className="mt-1 w-full rounded-lg bg-[#0d1117] border border-gray-700 px-3 py-2 text-sm"
+              onChange={(e) => setScope(e.target.value)}
+              className="flex-1 rounded bg-[#0d1117] border border-gray-700 px-2 py-2 text-sm"
             >
-              <option value="all">配下の階層すべて</option>
-              <option value="single">このURLのみ</option>
+              <option value="all">配下すべて</option>
               <option value="one-level">1階層下まで</option>
+              <option value="single">このURLのみ</option>
             </select>
-          </label>
+
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              className="flex-1 rounded bg-[#0d1117] border border-gray-700 px-2 py-2 text-sm"
+            >
+              <option value="静的HTML">静的HTML</option>
+              <option value="WordPress">WordPress</option>
+              <option value="Headless CMS">Headless CMS</option>
+            </select>
+          </div>
 
           <button
             onClick={addSite}
-            className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-xl font-medium"
+            disabled={submitting}
+            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-2 rounded"
           >
-            ＋ URLを追加
+            ＋ Webサイトを追加
           </button>
-        </section>
+        </div>
 
-        {/* Registered sites */}
-        <section>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold">
-              登録済みWebサイト
-            </h2>
-            <span className="text-sm text-gray-400">
-              {sites.length}件
-            </span>
+        {/* ===== 登録済みWebサイト一覧 ===== */}
+        {sites.length === 0 ? (
+          <div className="text-center text-sm text-gray-400">
+            まだWebサイトが登録されていません
           </div>
-
+        ) : (
           <div className="space-y-3">
             {sites.map((site) => (
               <div
                 key={site.id}
                 className="bg-[#161b22] rounded-xl p-4 flex items-center justify-between"
               >
-                <div>
-                  <div className="text-sm font-medium truncate max-w-[220px]">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">
                     {site.url}
                   </div>
-                  <div className="text-xs text-gray-400">
-                    クロール範囲：{scopeLabel(site.scope)}
+                  <div className="text-xs text-gray-400 mt-1">
+                    {site.type} / {site.scope}
+                    {site.ingested_urls != null &&
+                      site.status === "done" && (
+                        <span className="ml-2 text-green-400">
+                          ・{site.ingested_urls}ページ取り込み
+                        </span>
+                      )}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <span className="text-xs px-2 py-1 rounded-full bg-blue-900 text-blue-300">
-                    {site.type}
-                  </span>
+                  <StatusBadge status={site.status} />
+
+                  {(site.status === "done" ||
+                    site.status === "error") && (
+                    <button
+                      onClick={() => reingest(site.id)}
+                      disabled={loading}
+                      className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600"
+                    >
+                      🔄
+                    </button>
+                  )}
+
+                  {/* ★ 削除 */}
                   <button
-                    onClick={() => removeSite(site.id)}
-                    className="text-gray-400 hover:text-red-400"
+                    onClick={() => deleteSite(site.id)}
+                    disabled={loading}
+                    className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600"
+                    title="削除"
                   >
                     🗑
                   </button>
@@ -155,7 +183,7 @@ export default function WebSiteManagePage() {
               </div>
             ))}
           </div>
-        </section>
+        )}
       </div>
     </div>
   );

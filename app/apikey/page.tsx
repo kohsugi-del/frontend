@@ -1,11 +1,13 @@
 // frontend/app/apikey/page.tsx
 "use client";
 import { useState } from "react";
+import BackButton from "@/components/BackButton";
 
 export default function ApiKey() {
   const [key, setKey] = useState("");
   return (
     <div className="max-w-lg">
+      <BackButton />
       <h1 className="text-2xl font-bold mb-6">API設定</h1>
       <label className="block mb-2">OpenAI API Key</label>
       <input

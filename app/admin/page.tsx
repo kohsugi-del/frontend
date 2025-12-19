@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
 import { getSupabaseClient } from "@/lib/supabase";
+import BackButton from "@/components/BackButton";
 
 type Row = {
   id: string;
@@ -41,6 +42,7 @@ export default function AdminPage() {
 
   return (
     <div className="max-w-4xl mx-auto p-6">
+      <BackButton />
       <h1 className="text-2xl font-semibold mb-6">管理（RAGデータ）</h1>
 
       <div className="flex gap-2 mb-4">

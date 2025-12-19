@@ -1,129 +1,175 @@
-// app/ingest/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import BackButton from "@/components/BackButton";
+import StatusBadge from "@/components/StatusBadge";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const API = process.env.NEXT_PUBLIC_API_BASE!;
+
+type FileItem = {
+  id: number;
+  filename: string;
+  status: "pending" | "processing" | "done" | "error";
+  ingested_chunks?: number | null;
+};
 
 export default function IngestPage() {
-  const [urls, setUrls] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
+  // ====== 一覧 state ======
+  const [files, setFiles] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // URL取り込み
-  const ingestUrls = async () => {
-    if (!urls.trim()) return;
-    setLoading(true);
-    setStatus("🔗 URLを取り込み中…");
+  // ====== status表示 ======
+  const [status, setStatus] = useState("");
 
-    try {
-      const list = urls
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      const res = await fetch(`${API}/ingest`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ web_urls: list, pdf_paths: [] }),
-      });
-
-      const data = await res.json();
-      setStatus(`✅ URL取り込み完了（追加チャンク数：${data?.added_chunks ?? 0}）`);
-      setUrls("");
-    } catch (e) {
-      console.error(e);
-      setStatus("❌ URL取り込みに失敗しました");
-    } finally {
-      setLoading(false);
-    }
+  // ====== 1) 一覧取得（GET /files） ======
+  const fetchFiles = async () => {
+    const res = await fetch(`${API}/files`);
+    const data = await res.json();
+    setFiles(data);
   };
 
-  // PDFアップロード
-  const uploadPdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ====== 2) ファイルアップロード（POST /files） ======
+  const uploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setLoading(true);
-    setStatus("📄 PDFをアップロード中…");
+    setStatus("ファイルをアップロード中…");
 
     try {
       const fd = new FormData();
       fd.append("file", file);
 
-      const res = await fetch(`${API}/upload_pdf`, {
+      const res = await fetch(`${API}/files`, {
         method: "POST",
         body: fd,
       });
 
-      const data = await res.json();
-      setStatus(
-        `✅ PDF登録完了：${file.name}（追加チャンク数：${data?.added_chunks ?? 0}）`
-      );
+      if (!res.ok) {
+        throw new Error(`Upload failed: ${res.status}`);
+      }
+
+      setStatus(`アップロード完了：${file.name}`);
+      await fetchFiles();
     } catch (err) {
       console.error(err);
-      setStatus("❌ PDFアップロードに失敗しました");
+      setStatus("アップロードに失敗しました。");
     } finally {
       setLoading(false);
       e.target.value = "";
     }
   };
 
+  // ====== 3) 再取り込み（POST /files/{id}/reingest） ======
+  const reingestFile = async (id: number) => {
+    setLoading(true);
+    try {
+      await fetch(`${API}/files/${id}/reingest`, { method: "POST" });
+      await fetchFiles();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ====== 4) 削除（DELETE /files/{id}） ======
+  const deleteFile = async (id: number) => {
+    if (!confirm("このファイルを削除しますか？")) return;
+
+    setLoading(true);
+    try {
+      await fetch(`${API}/files/${id}`, { method: "DELETE" });
+      await fetchFiles();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ====== 初回 & ポーリング ======
+  useEffect(() => {
+    fetchFiles();
+    const timer = setInterval(fetchFiles, 5000); // 5秒ポーリング
+    return () => clearInterval(timer);
+  }, []);
+
   return (
-    <div className="min-h-screen bg-[#0d1117] text-gray-200 p-6">
+    <div className="min-h-screen bg-[#0d1117] text-gray-200 p-4">
       <div className="max-w-md mx-auto">
-        {/* Header */}
-        <h1 className="text-xl font-semibold mb-6 text-center">Manage Files</h1>
+        <BackButton />
 
-        {/* Upload Card */}
-        <div className="border border-dashed border-gray-600 rounded-xl p-6 bg-[#161b22] mb-6">
-          <div className="text-center mb-4">
-            <div className="text-sm text-gray-400 mb-1">
-              PDF / URL をアップロード
-            </div>
-            <div className="text-xs text-gray-500">
-              アップロードされた内容は自動的にAIにインデックスされます
-            </div>
-          </div>
+        <h1 className="text-lg font-semibold mb-6 text-center">
+          ファイル管理（アップロード）
+        </h1>
 
-          {/* PDF Upload */}
-          <label className="block mb-4">
-            <span className="block text-sm mb-1">PDFファイル</span>
+        {/* ====== アップロードUI（上部） ====== */}
+        <div className="bg-[#161b22] rounded-xl p-4 mb-6">
+          <p className="text-sm text-gray-400 mb-3">
+            PDFをアップロードすると自動で取り込み（インデックス化）します。
+          </p>
+
+          <label className="block">
             <input
               type="file"
               accept=".pdf"
-              onChange={uploadPdf}
-              className="block w-full text-sm file:mr-4 file:py-2 file:px-4
-                file:rounded-lg file:border-0
-                file:bg-blue-600 file:text-white
-                hover:file:bg-blue-500"
+              onChange={uploadFile}
+              disabled={loading}
+              className="hidden"
             />
+            <span className="inline-block cursor-pointer bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-2 rounded">
+              ＋ ファイルを選択
+            </span>
           </label>
 
-          {/* URL Input */}
-          <label className="block mb-4">
-            <span className="block text-sm mb-1">Web URL（改行区切り）</span>
-            <textarea
-              value={urls}
-              onChange={(e) => setUrls(e.target.value)}
-              placeholder="https://example.com"
-              className="w-full h-28 rounded-lg bg-[#0d1117] border border-gray-700 p-3 text-sm"
-            />
-          </label>
-
-          <button
-            onClick={ingestUrls}
-            disabled={loading}
-            className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50"
-          >
-            {loading ? "処理中…" : "Upload"}
-          </button>
+          {status && <div className="mt-3 text-sm opacity-90">{status}</div>}
         </div>
 
-        {/* Status */}
-        {status && (
-          <div className="text-xs bg-[#161b22] border border-gray-700 rounded-lg p-3">
-            {status}
+        {/* ====== ここが「あなたが貼った files.map」の置き場所（下部一覧） ====== */}
+        {files.length === 0 ? (
+          <div className="text-center text-sm text-gray-400">
+            まだファイルがありません
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {files.map((file) => (
+              <div
+                key={file.id}
+                className="bg-[#161b22] rounded-xl p-4 flex justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate">
+                    {file.filename}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">
+                    {file.ingested_chunks != null && file.status === "done" && (
+                      <>・{file.ingested_chunks}チャンク</>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-2 items-center">
+                  <StatusBadge status={file.status} />
+
+                  {(file.status === "done" || file.status === "error") && (
+                    <button
+                      onClick={() => reingestFile(file.id)}
+                      disabled={loading}
+                      className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600"
+                      title="再取り込み"
+                    >
+                      🔄
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => deleteFile(file.id)}
+                    disabled={loading}
+                    className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600"
+                    title="削除"
+                  >
+                    🗑
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
