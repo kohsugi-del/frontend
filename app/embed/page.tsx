@@ -1,20 +1,20 @@
 // app/embed/page.tsx
 "use client";
 
-export const dynamic = "force-dynamic";
-
 import { useState } from "react";
 import ChatBubble from "@/components/ChatBubble";
 import TypingDots from "@/components/TypingDots";
 
+export const dynamic = "force-dynamic";
+
+type Msg = { role: "user" | "assistant"; content: string };
+
 export default function EmbedPage() {
-  const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; content: string }[]
-  >([]);
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
 
-  async function send() {
+  const send = async (): Promise<void> => {
     const q = input.trim();
     if (!q) return;
 
@@ -23,30 +23,57 @@ export default function EmbedPage() {
     setThinking(true);
 
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE!;
-      const res = await fetch(`${API_BASE}/embed`, {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE;
+
+      if (!API_BASE) {
+        throw new Error(
+          "NEXT_PUBLIC_API_BASE が未設定です（.env.local / Vercel環境変数を確認）"
+        );
+      }
+
+      const base = API_BASE.replace(/\/$/, "");
+      const url = `${base}/embed`;
+
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q }),
       });
 
-      if (!res.ok) throw new Error("API error");
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        console.log("[API ERROR] url =", url);
+        console.log("[API ERROR] status =", res.status, res.statusText);
+        console.log("[API ERROR] body =", text);
 
-      const data = await res.json();
+        throw new Error(`API error: ${res.status} ${res.statusText}\n${text}`);
+      }
+
+      const data: any = await res.json();
+
+      const answer =
+        data?.answer ??
+        data?.message ??
+        data?.content ??
+        (typeof data === "string" ? data : "");
+
       setMessages((m) => [
         ...m,
-        { role: "assistant", content: data.answer },
+        {
+          role: "assistant",
+          content: answer || "（返答データに answer が見つかりませんでした）",
+        },
       ]);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
       setMessages((m) => [
         ...m,
-        { role: "assistant", content: "エラーが発生しました。" },
+        { role: "assistant", content: `エラー: ${e?.message ?? String(e)}` },
       ]);
     } finally {
       setThinking(false);
     }
-  }
+  };
 
   return (
     <div
@@ -109,6 +136,8 @@ export default function EmbedPage() {
             flex items-center justify-center
             text-white
           "
+          aria-label="send"
+          type="button"
         >
           ➤
         </button>
