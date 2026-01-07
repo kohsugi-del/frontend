@@ -1,6 +1,7 @@
 type Status = "pending" | "crawling" | "done" | "error";
 
-export default function StatusBadge({ status }: { status: Status }) {
+// APIから想定外の値が来ても落ちないように string も許容
+export default function StatusBadge({ status }: { status?: Status | string | null }) {
   const map: Record<Status, { label: string; className: string }> = {
     pending: {
       label: "準備中",
@@ -20,13 +21,20 @@ export default function StatusBadge({ status }: { status: Status }) {
     },
   };
 
-  const s = map[status];
+  const key = (status ?? "pending").toString() as Status;
+  const s = map[key];
+
+  // ✅ 想定外のstatusでも必ず表示できるフォールバック
+  const fallback = {
+    label: status ? `不明: ${status}` : "不明",
+    className: "bg-zinc-800 text-zinc-200",
+  };
+
+  const view = s ?? fallback;
 
   return (
-    <span
-      className={`text-xs px-2 py-1 rounded-full font-medium ${s.className}`}
-    >
-      {s.label}
+    <span className={`text-xs px-2 py-1 rounded-full font-medium ${view.className}`}>
+      {view.label}
     </span>
   );
 }
