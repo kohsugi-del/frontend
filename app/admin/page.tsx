@@ -62,7 +62,7 @@ export default function AdminPage() {
         {rows.map((r) => (
           <div key={r.id} className="p-4 border-b last:border-b-0">
             <div className="text-xs text-gray-500 mb-1">{r.id} / {r.created_at}</div>
-            <div className="text-sm whitespace-pre-wrap">{r.content}</div>
+            <div className="text-sm">{r.content}</div>
           </div>
         ))}
         {rows.length === 0 && <div className="p-6 text-sm text-gray-500">データがありません。</div>}

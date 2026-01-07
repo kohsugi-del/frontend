@@ -15,7 +15,7 @@ export default function ChatMessage({ role, content, refs }: ChatMessageProps) {
     <div className={`mb-4 ${isUser ? "text-right" : "text-left"}`}>
       <div
         className={[
-          "inline-block max-w-[85%] whitespace-pre-wrap p-3 rounded-xl",
+          "inline-block max-w-[85%] p-3 rounded-xl",
           isUser
             ? "bg-[#1F6FEB] text-white"
             : "bg-[#0D1117] text-gray-200 border border-[#30363D]",
