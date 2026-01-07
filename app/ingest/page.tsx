@@ -23,10 +23,30 @@ export default function IngestPage() {
 
   // ====== 1) 一覧取得（GET /files） ======
   const fetchFiles = async () => {
-    const res = await fetch(`${API}/files`);
-    const data = await res.json();
-    setFiles(data);
+    try {
+      const res = await fetch(`${API}/files`);
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        console.log("[FILES] status =", res.status, res.statusText);
+        console.log("[FILES] body =", text);
+        setFiles([]); // 失敗時は空配列にして落とさない
+        return;
+      }
+
+      const data = await res.json();
+
+      // ✅ APIが配列を直接返す場合: data が配列
+      // ✅ APIが { files: [...] } を返す場合: data.files が配列
+      const list = Array.isArray(data) ? data : Array.isArray(data?.files) ? data.files : [];
+
+      setFiles(list);
+    } catch (e) {
+      console.error(e);
+      setFiles([]); // ネットワークエラー等でも落とさない
+    }
   };
+
 
   // ====== 2) ファイルアップロード（POST /files） ======
   const uploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
