@@ -9,7 +9,7 @@ type Site = {
   url: string;
   scope: string;
   type: string;
-  status: "pending" | "crawling" | "done" | "error";
+  status: "pending" | "crawling" | "done" | "error" | string;
   ingested_urls?: number | null;
 };
 
@@ -26,7 +26,7 @@ export default function WebSiteManagePage() {
   const [submitting, setSubmitting] = useState(false);
 
   const api = (path: string) => {
-    if (!API_BASE) return ""; // 未設定時は空
+    if (!API_BASE) return "";
     return `${API_BASE.replace(/\/$/, "")}${path}`;
   };
 
@@ -51,7 +51,6 @@ export default function WebSiteManagePage() {
 
       const data = await res.json();
 
-      // ✅ data が配列 or { sites: 配列 } の両対応
       const list: Site[] = Array.isArray(data)
         ? data
         : Array.isArray((data as any)?.sites)
@@ -133,116 +132,174 @@ export default function WebSiteManagePage() {
 
   useEffect(() => {
     fetchSites();
-    const timer = setInterval(fetchSites, 5000); // 5秒ポーリング
+    const timer = setInterval(fetchSites, 5000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API_BASE]);
 
   return (
-    <div className="min-h-screen bg-[#0d1117] text-gray-200 p-4">
-      <div className="max-w-md mx-auto">
-        <BackButton />
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      {/* 背景の薄いグラデ（統一トーン） */}
+      <div className="pointer-events-none fixed inset-0 opacity-45">
+        <div className="absolute -top-40 left-10 h-96 w-96 rounded-full bg-fuchsia-500/30 blur-3xl" />
+        <div className="absolute top-40 right-10 h-96 w-96 rounded-full bg-cyan-500/25 blur-3xl" />
+        <div className="absolute bottom-10 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-emerald-500/15 blur-3xl" />
+      </div>
 
-        <h1 className="text-lg font-semibold mb-6 text-center">Webサイト管理</h1>
+      <div className="relative mx-auto w-full max-w-4xl px-4 py-8">
+        {/* Header */}
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <BackButton />
+            <div>
+              <div className="text-xs text-zinc-400">Sites</div>
+              <h1 className="text-xl font-semibold tracking-tight">Webサイト管理</h1>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs">
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-zinc-300">
+              sites: {sites.length}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-zinc-300">
+              poll: 5s
+            </span>
+          </div>
+        </div>
 
         {!API_BASE && (
-          <div className="bg-red-900/30 border border-red-800 text-red-200 rounded-xl p-3 mb-4 text-sm">
+          <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
             NEXT_PUBLIC_API_BASE が未設定です（.env.local を確認して Next.js を再起動）
           </div>
         )}
 
-        {/* ===== 新しいWebサイトを追加 ===== */}
-        <div className="bg-[#161b22] rounded-xl p-4 mb-6">
-          <h2 className="text-sm font-semibold mb-3">新しいWebサイトを追加</h2>
+        {/* Add site card */}
+        <section className="mb-6 rounded-3xl border border-white/10 bg-white/5 p-5 backdrop-blur">
+          <div className="mb-2 text-sm font-semibold">新しいWebサイトを追加</div>
+          <p className="text-sm text-zinc-400">
+            URL・対象範囲・種別を指定して登録します（取り込みは別途実行）。
+          </p>
 
-          <input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://example.com/"
-            className="w-full mb-2 rounded bg-[#0d1117] border border-gray-700 px-3 py-2 text-sm"
-          />
+          <div className="mt-4 space-y-3">
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com/"
+              className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none placeholder:text-zinc-500 focus:border-white/20"
+            />
 
-          <div className="flex gap-2 mb-3">
-            <select
-              value={scope}
-              onChange={(e) => setScope(e.target.value)}
-              className="flex-1 rounded bg-[#0d1117] border border-gray-700 px-2 py-2 text-sm"
-            >
-              <option value="all">配下すべて</option>
-              <option value="one-level">1階層下まで</option>
-              <option value="single">このURLのみ</option>
-            </select>
-
-            <select
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-              className="flex-1 rounded bg-[#0d1117] border border-gray-700 px-2 py-2 text-sm"
-            >
-              <option value="静的HTML">静的HTML</option>
-              <option value="WordPress">WordPress</option>
-              <option value="Headless CMS">Headless CMS</option>
-            </select>
-          </div>
-
-          <button
-            onClick={addSite}
-            disabled={submitting || !API_BASE}
-            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-2 rounded"
-          >
-            ＋ Webサイトを追加
-          </button>
-        </div>
-
-        {/* ===== 登録済みWebサイト一覧 ===== */}
-        {sites.length === 0 ? (
-          <div className="text-center text-sm text-gray-400">
-            まだWebサイトが登録されていません
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {sites.map((site) => (
-              <div
-                key={site.id}
-                className="bg-[#161b22] rounded-xl p-4 flex items-center justify-between"
+            <div className="grid gap-2 sm:grid-cols-2">
+              <select
+                value={scope}
+                onChange={(e) => setScope(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-white/20"
               >
-                <div className="min-w-0">
-                  <div className="text-sm font-medium truncate">{site.url}</div>
-                  <div className="text-xs text-gray-400 mt-1">
-                    {site.type} / {site.scope}
-                    {site.ingested_urls != null && site.status === "done" && (
-                      <span className="ml-2 text-green-400">
-                        ・{site.ingested_urls}ページ取り込み
-                      </span>
-                    )}
+                <option value="all">配下すべて</option>
+                <option value="one-level">1階層下まで</option>
+                <option value="single">このURLのみ</option>
+              </select>
+
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-white/20"
+              >
+                <option value="静的HTML">静的HTML</option>
+                <option value="WordPress">WordPress</option>
+                <option value="Headless CMS">Headless CMS</option>
+              </select>
+            </div>
+
+            <button
+              onClick={addSite}
+              disabled={submitting || !API_BASE}
+              className="w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-zinc-900 hover:opacity-90 disabled:opacity-60"
+            >
+              {submitting ? "追加中…" : "＋ Webサイトを追加"}
+            </button>
+
+            <div className="text-xs text-zinc-400">
+              ※ API が未設定の場合は追加できません
+            </div>
+          </div>
+        </section>
+
+        {/* List card */}
+        <section className="rounded-3xl border border-white/10 bg-white/5 p-5 backdrop-blur">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold">登録済みWebサイト一覧</div>
+            <button
+              onClick={fetchSites}
+              disabled={loading || !API_BASE}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+            >
+              {loading ? "更新中…" : "更新"}
+            </button>
+          </div>
+
+          {sites.length === 0 ? (
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-6 text-sm text-zinc-400">
+              まだWebサイトが登録されていません
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {sites.map((site) => (
+                <div
+                  key={site.id}
+                  className="rounded-2xl border border-white/10 bg-black/30 p-4 hover:bg-black/40"
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    {/* Left */}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <div className="truncate text-sm font-semibold">{site.url}</div>
+                        <span className="text-xs text-zinc-500">#{site.id}</span>
+                      </div>
+
+                      <div className="mt-1 text-xs text-zinc-400">
+                        {site.type} / {site.scope}
+                        {site.ingested_urls != null && site.status === "done" && (
+                          <span className="ml-2 text-emerald-300">
+                            ・{site.ingested_urls}ページ取り込み
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right */}
+                    <div className="flex items-center gap-2">
+                      <StatusBadge status={site.status} />
+
+                      {(site.status === "done" || site.status === "error") && (
+                        <button
+                          onClick={() => reingest(site.id)}
+                          disabled={loading || !API_BASE}
+                          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                          title="再取り込み"
+                        >
+                          🔄 再
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => deleteSite(site.id)}
+                        disabled={loading || !API_BASE}
+                        className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200 hover:bg-red-500/15 disabled:opacity-60"
+                        title="削除"
+                      >
+                        🗑 削
+                      </button>
+                    </div>
                   </div>
                 </div>
+              ))}
+            </div>
+          )}
+        </section>
 
-                <div className="flex items-center gap-2">
-                  <StatusBadge status={site.status} />
-
-                  {(site.status === "done" || site.status === "error") && (
-                    <button
-                      onClick={() => reingest(site.id)}
-                      disabled={loading || !API_BASE}
-                      className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600"
-                    >
-                      🔄
-                    </button>
-                  )}
-
-                  <button
-                    onClick={() => deleteSite(site.id)}
-                    disabled={loading || !API_BASE}
-                    className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600"
-                    title="削除"
-                  >
-                    🗑
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="mt-8 text-center text-xs text-zinc-500">
+          Sites Dashboard
+        </div>
       </div>
     </div>
   );
