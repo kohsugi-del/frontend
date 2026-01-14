@@ -93,12 +93,12 @@ export default function Home() {
             >
               埋め込みプレビュー ↗
             </a>
-            <a
+            {/* <a
               className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-zinc-900 hover:opacity-90"
               href="/chat"
             >
               チャットを開く
-            </a>
+            </a> */}
           </div>
         </div>
 
@@ -106,24 +106,22 @@ export default function Home() {
         <section className="mb-6 rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs text-zinc-300">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                System online
-              </div>
+              {/* <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs text-zinc-300">
+              </div> */}
               <h2 className="mt-3 text-xl font-semibold tracking-tight">
-                チャット精度とデータ更新を、ここから一括管理
+                データ更新をここから一括管理
               </h2>
               <p className="mt-1 text-sm text-zinc-400">
-                ingest（夜間自動）・ファイル・サイト・チャット動作確認を、最短導線でまとめました。
+                ファイル・サイト・チャット動作確認を、最短導線でまとめました。
               </p>
             </div>
 
-            <div className="grid w-full grid-cols-2 gap-3 md:w-[420px]">
+            {/* <div className="grid w-full grid-cols-2 gap-3 md:w-[420px]">
               <Stat label="学習データ" value="Documents: —" />
               <Stat label="最終Ingest" value="—" />
               <Stat label="状態" value="OK" />
               <Stat label="環境" value="Local / Actions" />
-            </div>
+            </div> */}
           </div>
         </section>
 
@@ -153,7 +151,7 @@ export default function Home() {
         </section>
 
         {/* Activity / Tips */}
-        <div className="grid gap-6 lg:grid-cols-3">
+        {/* <div className="grid gap-6 lg:grid-cols-3">
           <section className="lg:col-span-2 rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
             <div className="flex items-center justify-between">
               <div>
@@ -223,7 +221,7 @@ export default function Home() {
               </Link>
             </div>
           </aside>
-        </div>
+        </div> */}
 
         {/* Footer */}
         <footer className="mt-10 text-center text-xs text-zinc-500">

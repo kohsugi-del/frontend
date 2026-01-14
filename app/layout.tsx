@@ -6,12 +6,10 @@ export const metadata = {
   description: "RAG Chatbot",
 };
 
-export default function RootLayout({
-  children,
-}: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja">
-      <body>{children}</body>
+      <body suppressHydrationWarning>{children}</body>
     </html>
   );
 }

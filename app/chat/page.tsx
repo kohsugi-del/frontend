@@ -33,6 +33,10 @@ export default function ChatPage() {
       }
 
       const base = API_BASE.replace(/\/$/, "");
+
+      console.log("API base =", base);
+      console.log("POST url =", `${base}/chat`);
+
       const url = `${base}/chat`;
 
       const res = await fetch(url, {

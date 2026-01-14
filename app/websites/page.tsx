@@ -25,6 +25,9 @@ export default function WebSiteManagePage() {
   const [type, setType] = useState("静的HTML");
   const [submitting, setSubmitting] = useState(false);
 
+  // ✅ 追加後に取り込み開始するか（任意）
+  const [autoIngest, setAutoIngest] = useState(false);
+
   const api = (path: string) => {
     if (!API_BASE) return "";
     return `${API_BASE.replace(/\/$/, "")}${path}`;
@@ -55,6 +58,10 @@ export default function WebSiteManagePage() {
         ? data
         : Array.isArray((data as any)?.sites)
         ? (data as any).sites
+        : Array.isArray((data as any)?.items)
+        ? (data as any).items
+        : Array.isArray((data as any)?.data)
+        ? (data as any).data
         : [];
 
       setSites(list);
@@ -64,9 +71,31 @@ export default function WebSiteManagePage() {
     }
   };
 
+  // ✅ 取り込み開始（バックエンドが POST /{site_id}/reingest の場合）
+  const startIngest = async (id: number) => {
+    if (!API_BASE) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch(api(`/${id}/reingest`), { method: "POST" }); // ★ここが重要
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`POST /${id}/reingest failed: ${res.status}\n${text}`);
+      }
+      await fetchSites();
+    } catch (e) {
+      console.error(e);
+      alert("取り込み開始に失敗しました（Console / Network を確認してください）");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Webサイト追加
   const addSite = async () => {
-    if (!url) return;
+    const u = url.trim();
+    if (!u) return;
+
     if (!API_BASE) {
       alert("NEXT_PUBLIC_API_BASE が未設定です");
       return;
@@ -78,7 +107,7 @@ export default function WebSiteManagePage() {
       const res = await fetch(api("/sites"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, scope, type }),
+        body: JSON.stringify({ url: u, scope, type }),
       });
 
       if (!res.ok) {
@@ -86,30 +115,36 @@ export default function WebSiteManagePage() {
         throw new Error(`POST /sites failed: ${res.status}\n${text}`);
       }
 
+      // ✅ 追加レスポンスから id を取りたい（返り方が複数あり得るので吸収）
+      let createdId: number | null = null;
+      try {
+        const data = await res.json().catch(() => null);
+
+        // よくある返り方: { id: 1 } / { site: { id: 1 } } / { data: { id: 1 } }
+        const id1 = (data as any)?.id;
+        const id2 = (data as any)?.site?.id;
+        const id3 = (data as any)?.data?.id;
+
+        if (typeof id1 === "number") createdId = id1;
+        else if (typeof id2 === "number") createdId = id2;
+        else if (typeof id3 === "number") createdId = id3;
+      } catch {
+        // json じゃない場合もあるので無視
+      }
+
       setUrl("");
-      await fetchSites();
+
+      // ✅ 追加後に取り込み開始（チェックON & idが取れた場合）
+      if (autoIngest && createdId != null) {
+        await startIngest(createdId);
+      } else {
+        await fetchSites();
+      }
     } catch (e) {
       console.error(e);
-      alert("サイト追加に失敗しました（Console を確認してください）");
+      alert("サイト追加に失敗しました（Console / Network を確認してください）");
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  // 再クロール
-  const reingest = async (id: number) => {
-    if (!API_BASE) return;
-
-    setLoading(true);
-    try {
-      const res = await fetch(api(`/sites/${id}/reingest`), { method: "POST" });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`POST /sites/${id}/reingest failed: ${res.status}\n${text}`);
-      }
-      await fetchSites();
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -125,6 +160,9 @@ export default function WebSiteManagePage() {
         throw new Error(`DELETE /sites/${id} failed: ${res.status}\n${text}`);
       }
       await fetchSites();
+    } catch (e) {
+      console.error(e);
+      alert("削除に失敗しました（Console / Network を確認してください）");
     } finally {
       setLoading(false);
     }
@@ -177,7 +215,7 @@ export default function WebSiteManagePage() {
         <section className="mb-6 rounded-3xl border border-white/10 bg-white/5 p-5 backdrop-blur">
           <div className="mb-2 text-sm font-semibold">新しいWebサイトを追加</div>
           <p className="text-sm text-zinc-400">
-            URL・対象範囲・種別を指定して登録します（取り込みは別途実行）。
+            URL・対象範囲・種別を指定して登録します（取り込みは別途実行 or 任意で自動開始）。
           </p>
 
           <div className="mt-4 space-y-3">
@@ -209,6 +247,17 @@ export default function WebSiteManagePage() {
                 <option value="Headless CMS">Headless CMS</option>
               </select>
             </div>
+
+            {/* ✅ 追加後に取り込み開始 */}
+            <label className="flex items-center gap-2 text-xs text-zinc-300">
+              <input
+                type="checkbox"
+                checked={autoIngest}
+                onChange={(e) => setAutoIngest(e.target.checked)}
+                className="h-4 w-4"
+              />
+              追加後に取り込み開始する（id が返る場合のみ）
+            </label>
 
             <button
               onClick={addSite}
@@ -270,9 +319,20 @@ export default function WebSiteManagePage() {
                     <div className="flex items-center gap-2">
                       <StatusBadge status={site.status} />
 
+                      {/* ✅ 手動：取り込み開始（pendingでも押せる） */}
+                      <button
+                        onClick={() => startIngest(site.id)}
+                        disabled={loading || !API_BASE || site.status === "crawling"}
+                        className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
+                        title="取り込み開始"
+                      >
+                        ▶ 取
+                      </button>
+
+                      {/* ✅ 再取り込み（done/error向け） */}
                       {(site.status === "done" || site.status === "error") && (
                         <button
-                          onClick={() => reingest(site.id)}
+                          onClick={() => startIngest(site.id)}
                           disabled={loading || !API_BASE}
                           className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
                           title="再取り込み"
