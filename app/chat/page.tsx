@@ -8,12 +8,17 @@ import ChatInput from "@/components/ChatInput";
 import TypingDots from "@/components/TypingDots";
 import BackButton from "@/components/BackButton";
 
+type Msg = { role: "user" | "assistant"; content: string };
+
 export default function ChatPage() {
-  const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; content: string }[]
-  >([]);
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
+
+  // UI表示用：API疎通状態
+  const [apiStatus, setApiStatus] = useState<
+    "idle" | "connected" | "error"
+  >("idle");
 
   async function sendMessage() {
     const userMessage = input.trim();
@@ -24,20 +29,8 @@ export default function ChatPage() {
     setThinking(true);
 
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE;
-
-      if (!API_BASE) {
-        throw new Error(
-          "NEXT_PUBLIC_API_BASE が未設定です（.env.local / Vercel環境変数を確認して、devサーバーを再起動してください）"
-        );
-      }
-
-      const base = API_BASE.replace(/\/$/, "");
-
-      console.log("API base =", base);
-      console.log("POST url =", `${base}/chat`);
-
-      const url = `${base}/chat`;
+      // ✅ FastAPI の base は不要。Next.js の Route Handler に投げる
+      const url = "/api/chat";
 
       const res = await fetch(url, {
         method: "POST",
@@ -45,17 +38,19 @@ export default function ChatPage() {
         body: JSON.stringify({ message: userMessage, top_k: 8 }),
       });
 
+      const data: any = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        console.log("[CHAT] url =", url);
-        console.log("[CHAT] status =", res.status, res.statusText);
-        console.log("[CHAT] body =", text);
-        throw new Error(`API error: ${res.status} ${res.statusText}\n${text}`);
+        const msg =
+          data?.error ??
+          `API error: ${res.status} ${res.statusText}`;
+        setApiStatus("error");
+        throw new Error(msg);
       }
 
-      const data: any = await res.json();
-      const botReply = data?.answer ?? "回答に失敗しました。";
+      setApiStatus("connected");
 
+      const botReply = data?.answer ?? "回答に失敗しました。";
       setMessages((m) => [...m, { role: "assistant", content: botReply }]);
     } catch (e: any) {
       console.error(e);
@@ -67,6 +62,13 @@ export default function ChatPage() {
       setThinking(false);
     }
   }
+
+  const apiBadge =
+    apiStatus === "connected"
+      ? "connected"
+      : apiStatus === "error"
+      ? "error"
+      : "ready";
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -95,7 +97,7 @@ export default function ChatPage() {
                 top_k: 8
               </span>
               <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-zinc-300">
-                API: {process.env.NEXT_PUBLIC_API_BASE ? "connected" : "unset"}
+                API: {apiBadge}
               </span>
             </div>
           </div>

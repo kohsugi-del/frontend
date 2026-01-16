@@ -13,20 +13,36 @@ type Site = {
   ingested_urls?: number | null;
 };
 
+type BulkResult = {
+  total: number;
+  ok: { url: string; id?: number | null }[];
+  ng: { url: string; reason: string }[];
+};
+
 export default function WebSiteManagePage() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE; // ✅ ここで読む（!で握りつぶさない）
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE;
 
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // 追加用 state
+  // 追加用 state（単一）
   const [url, setUrl] = useState("");
-  const [scope, setScope] = useState("all");
-  const [type, setType] = useState("静的HTML");
+
+  // ✅ scope は「このURLのみ」が基本、2択のみ
+  const [scope, setScope] = useState<"single" | "all">("single");
+
+  // ✅ type はUIから消す（送信は固定）
+  const FIXED_TYPE = "静的HTML";
+
   const [submitting, setSubmitting] = useState(false);
 
   // ✅ 追加後に取り込み開始するか（任意）
   const [autoIngest, setAutoIngest] = useState(false);
+
+  // ✅ 一括追加モード
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
 
   const api = (path: string) => {
     if (!API_BASE) return "";
@@ -71,18 +87,42 @@ export default function WebSiteManagePage() {
     }
   };
 
-  // ✅ 取り込み開始（バックエンドが POST /{site_id}/reingest の場合）
+  /**
+   * ✅ 取り込み開始（サイト用）
+   * - 本命: POST /sites/{id}/reingest_local
+   * - 互換: POST /sites/{id}/reingest
+   */
   const startIngest = async (id: number) => {
     if (!API_BASE) return;
 
     setLoading(true);
+
+    const candidates = [
+      `/sites/${id}/reingest_local`,
+      `/sites/${id}/reingest`,
+    ];
+
     try {
-      const res = await fetch(api(`/${id}/reingest`), { method: "POST" }); // ★ここが重要
-      if (!res.ok) {
+      let lastErr: unknown = null;
+
+      for (const path of candidates) {
+        const fullUrl = api(path);
+
+        const res = await fetch(fullUrl, { method: "POST" });
+        if (res.ok) {
+          await fetchSites();
+          return;
+        }
+
         const text = await res.text().catch(() => "");
-        throw new Error(`POST /${id}/reingest failed: ${res.status}\n${text}`);
+        if (res.status === 404 || res.status === 405) {
+          lastErr = new Error(`POST ${fullUrl} => ${res.status}\n${text}`);
+          continue;
+        }
+        throw new Error(`POST ${fullUrl} => ${res.status}\n${text}`);
       }
-      await fetchSites();
+
+      throw lastErr ?? new Error("All ingest endpoints failed");
     } catch (e) {
       console.error(e);
       alert("取り込み開始に失敗しました（Console / Network を確認してください）");
@@ -91,7 +131,25 @@ export default function WebSiteManagePage() {
     }
   };
 
-  // Webサイト追加
+  // ✅ URL抽出（改行 / スペース / タブ / カンマ区切りを許容）
+  const parseUrls = (text: string) => {
+    const tokens = text
+      .split(/[\n\r\t ,]+/g)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const t of tokens) {
+      if (!seen.has(t)) {
+        seen.add(t);
+        unique.push(t);
+      }
+    }
+    return unique;
+  };
+
+  // Webサイト追加（単一）
   const addSite = async () => {
     const u = url.trim();
     if (!u) return;
@@ -102,12 +160,14 @@ export default function WebSiteManagePage() {
     }
 
     setSubmitting(true);
+    setBulkResult(null);
 
     try {
       const res = await fetch(api("/sites"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: u, scope, type }),
+        // ✅ type は固定で送る
+        body: JSON.stringify({ url: u, scope, type: FIXED_TYPE }),
       });
 
       if (!res.ok) {
@@ -115,26 +175,19 @@ export default function WebSiteManagePage() {
         throw new Error(`POST /sites failed: ${res.status}\n${text}`);
       }
 
-      // ✅ 追加レスポンスから id を取りたい（返り方が複数あり得るので吸収）
       let createdId: number | null = null;
       try {
         const data = await res.json().catch(() => null);
-
-        // よくある返り方: { id: 1 } / { site: { id: 1 } } / { data: { id: 1 } }
         const id1 = (data as any)?.id;
         const id2 = (data as any)?.site?.id;
         const id3 = (data as any)?.data?.id;
-
         if (typeof id1 === "number") createdId = id1;
         else if (typeof id2 === "number") createdId = id2;
         else if (typeof id3 === "number") createdId = id3;
-      } catch {
-        // json じゃない場合もあるので無視
-      }
+      } catch {}
 
       setUrl("");
 
-      // ✅ 追加後に取り込み開始（チェックON & idが取れた場合）
       if (autoIngest && createdId != null) {
         await startIngest(createdId);
       } else {
@@ -143,6 +196,85 @@ export default function WebSiteManagePage() {
     } catch (e) {
       console.error(e);
       alert("サイト追加に失敗しました（Console / Network を確認してください）");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ✅ Webサイト追加（一括）
+  const addSitesBulk = async () => {
+    if (!API_BASE) {
+      alert("NEXT_PUBLIC_API_BASE が未設定です");
+      return;
+    }
+
+    const urls = parseUrls(bulkText);
+    if (urls.length === 0) return;
+
+    setSubmitting(true);
+    setBulkResult(null);
+
+    try {
+      const results = await Promise.allSettled(
+        urls.map(async (u) => {
+          const res = await fetch(api("/sites"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // ✅ type は固定で送る
+            body: JSON.stringify({ url: u, scope, type: FIXED_TYPE }),
+          });
+
+          if (!res.ok) {
+            const text = await res.text().catch(() => "");
+            throw new Error(
+              `POST /sites failed: ${res.status} ${res.statusText}\n${text}`
+            );
+          }
+
+          let createdId: number | null = null;
+          try {
+            const data = await res.json().catch(() => null);
+            const id1 = (data as any)?.id;
+            const id2 = (data as any)?.site?.id;
+            const id3 = (data as any)?.data?.id;
+            if (typeof id1 === "number") createdId = id1;
+            else if (typeof id2 === "number") createdId = id2;
+            else if (typeof id3 === "number") createdId = id3;
+          } catch {}
+
+          return { url: u, id: createdId };
+        })
+      );
+
+      const ok: BulkResult["ok"] = [];
+      const ng: BulkResult["ng"] = [];
+
+      for (let i = 0; i < results.length; i++) {
+        const u = urls[i];
+        const r = results[i];
+        if (r.status === "fulfilled") ok.push(r.value);
+        else
+          ng.push({
+            url: u,
+            reason: String(r.reason?.message ?? r.reason ?? "unknown"),
+          });
+      }
+
+      setBulkResult({ total: urls.length, ok, ng });
+
+      if (autoIngest) {
+        const ids = ok.map((x) => x.id).filter((v): v is number => typeof v === "number");
+        for (const id of ids) {
+          await startIngest(id);
+        }
+      } else {
+        await fetchSites();
+      }
+
+      setBulkText("");
+    } catch (e) {
+      console.error(e);
+      alert("一括追加に失敗しました（Console / Network を確認してください）");
     } finally {
       setSubmitting(false);
     }
@@ -177,7 +309,6 @@ export default function WebSiteManagePage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* 背景の薄いグラデ（統一トーン） */}
       <div className="pointer-events-none fixed inset-0 opacity-45">
         <div className="absolute -top-40 left-10 h-96 w-96 rounded-full bg-fuchsia-500/30 blur-3xl" />
         <div className="absolute top-40 right-10 h-96 w-96 rounded-full bg-cyan-500/25 blur-3xl" />
@@ -185,7 +316,6 @@ export default function WebSiteManagePage() {
       </div>
 
       <div className="relative mx-auto w-full max-w-4xl px-4 py-8">
-        {/* Header */}
         <div className="mb-5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <BackButton />
@@ -213,42 +343,59 @@ export default function WebSiteManagePage() {
 
         {/* Add site card */}
         <section className="mb-6 rounded-3xl border border-white/10 bg-white/5 p-5 backdrop-blur">
-          <div className="mb-2 text-sm font-semibold">新しいWebサイトを追加</div>
-          <p className="text-sm text-zinc-400">
-            URL・対象範囲・種別を指定して登録します（取り込みは別途実行 or 任意で自動開始）。
-          </p>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">新しいWebサイトを追加</div>
+              <p className="text-sm text-zinc-400">
+                URL・対象範囲を指定して登録します（基本は「このURLのみ」）。
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                setBulkMode((v) => !v);
+                setBulkResult(null);
+              }}
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+              title="入力モード切替"
+            >
+              {bulkMode ? "単一入力へ" : "一括入力へ"}
+            </button>
+          </div>
 
           <div className="mt-4 space-y-3">
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://example.com/"
-              className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none placeholder:text-zinc-500 focus:border-white/20"
-            />
+            {!bulkMode ? (
+              <input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com/"
+                className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none placeholder:text-zinc-500 focus:border-white/20"
+              />
+            ) : (
+              <textarea
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                placeholder={`https://example.com/\nhttps://example.org/\nhttps://example.net/`}
+                rows={6}
+                className="w-full resize-y rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none placeholder:text-zinc-500 focus:border-white/20"
+              />
+            )}
 
+            {/* ✅ scope は2択のみ（デフォルト single） */}
             <div className="grid gap-2 sm:grid-cols-2">
               <select
                 value={scope}
-                onChange={(e) => setScope(e.target.value)}
+                onChange={(e) => setScope(e.target.value as "single" | "all")}
                 className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-white/20"
               >
+                <option value="single">このURLのみ（基本）</option>
                 <option value="all">配下すべて</option>
-                <option value="one-level">1階層下まで</option>
-                <option value="single">このURLのみ</option>
               </select>
 
-              <select
-                value={type}
-                onChange={(e) => setType(e.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-white/20"
-              >
-                <option value="静的HTML">静的HTML</option>
-                <option value="WordPress">WordPress</option>
-                <option value="Headless CMS">Headless CMS</option>
-              </select>
+              {/* 右側は空きスペースにして見た目を揃える（不要なら消してOK） */}
+              <div className="hidden sm:block" />
             </div>
 
-            {/* ✅ 追加後に取り込み開始 */}
             <label className="flex items-center gap-2 text-xs text-zinc-300">
               <input
                 type="checkbox"
@@ -260,16 +407,48 @@ export default function WebSiteManagePage() {
             </label>
 
             <button
-              onClick={addSite}
+              onClick={bulkMode ? addSitesBulk : addSite}
               disabled={submitting || !API_BASE}
               className="w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-zinc-900 hover:opacity-90 disabled:opacity-60"
             >
-              {submitting ? "追加中…" : "＋ Webサイトを追加"}
+              {submitting
+                ? bulkMode
+                  ? "一括追加中…"
+                  : "追加中…"
+                : bulkMode
+                ? "＋ Webサイトを一括追加"
+                : "＋ Webサイトを追加"}
             </button>
 
-            <div className="text-xs text-zinc-400">
-              ※ API が未設定の場合は追加できません
-            </div>
+            {bulkMode && (
+              <div className="text-xs text-zinc-400">
+                ※ 改行/スペース/カンマ区切りOK・重複URLは自動で除外します
+              </div>
+            )}
+
+            {bulkResult && (
+              <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-xs text-zinc-300">
+                <div className="font-semibold">
+                  一括追加結果：{bulkResult.total}件中 {bulkResult.ok.length}件成功 /{" "}
+                  {bulkResult.ng.length}件失敗
+                </div>
+
+                {bulkResult.ng.length > 0 && (
+                  <div className="mt-2 space-y-1 text-red-200">
+                    {bulkResult.ng.slice(0, 5).map((x) => (
+                      <div key={x.url} className="truncate">
+                        NG: {x.url}（{x.reason}）
+                      </div>
+                    ))}
+                    {bulkResult.ng.length > 5 && (
+                      <div className="text-zinc-400">…他 {bulkResult.ng.length - 5} 件</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="text-xs text-zinc-400">※ API が未設定の場合は追加できません</div>
           </div>
         </section>
 
@@ -298,7 +477,6 @@ export default function WebSiteManagePage() {
                   className="rounded-2xl border border-white/10 bg-black/30 p-4 hover:bg-black/40"
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    {/* Left */}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <div className="truncate text-sm font-semibold">{site.url}</div>
@@ -306,6 +484,7 @@ export default function WebSiteManagePage() {
                       </div>
 
                       <div className="mt-1 text-xs text-zinc-400">
+                        {/* ✅ type は固定だが、一覧表示はそのままでもOK（不要なら消してOK） */}
                         {site.type} / {site.scope}
                         {site.ingested_urls != null && site.status === "done" && (
                           <span className="ml-2 text-emerald-300">
@@ -315,11 +494,9 @@ export default function WebSiteManagePage() {
                       </div>
                     </div>
 
-                    {/* Right */}
                     <div className="flex items-center gap-2">
                       <StatusBadge status={site.status} />
 
-                      {/* ✅ 手動：取り込み開始（pendingでも押せる） */}
                       <button
                         onClick={() => startIngest(site.id)}
                         disabled={loading || !API_BASE || site.status === "crawling"}
@@ -329,7 +506,6 @@ export default function WebSiteManagePage() {
                         ▶ 取
                       </button>
 
-                      {/* ✅ 再取り込み（done/error向け） */}
                       {(site.status === "done" || site.status === "error") && (
                         <button
                           onClick={() => startIngest(site.id)}
@@ -357,9 +533,7 @@ export default function WebSiteManagePage() {
           )}
         </section>
 
-        <div className="mt-8 text-center text-xs text-zinc-500">
-          Sites Dashboard
-        </div>
+        <div className="mt-8 text-center text-xs text-zinc-500">Sites Dashboard</div>
       </div>
     </div>
   );
