@@ -4,39 +4,7 @@ import { useEffect, useState } from "react";
 import BackButton from "@/components/BackButton";
 import StatusBadge from "@/components/StatusBadge";
 
-/**
- * API_BASE を安全に取得する
- * - 未設定なら "" を返す（その場合、各処理で早期return）
- * - 末尾スラッシュは削除して URL を正規化
- */
-function getApiBase() {
-  const v = process.env.NEXT_PUBLIC_API_BASE;
-  if (!v) {
-    console.error(
-      "NEXT_PUBLIC_API_BASE is missing. Check frontend/.env.local and restart dev server."
-    );
-    return "";
-  }
-  return v.replace(/\/$/, "");
-}
-
-/**
- * ✅ バックエンドの status を UI 表示用に正規化
- * 要望: "uploaded" は UI上「完了(done)」として扱う
- */
 type UiStatus = "pending" | "processing" | "done" | "error";
-
-function normalizeStatusToUi(s: any): UiStatus {
-  const v = String(s ?? "").toLowerCase().trim();
-
-  // ★ここがポイント："uploaded" を "done" に寄せる
-  if (v === "uploaded") return "done";
-
-  if (v === "pending" || v === "processing" || v === "done" || v === "error") {
-    return v;
-  }
-  return "pending";
-}
 
 type FileItem = {
   id: number;
@@ -44,143 +12,83 @@ type FileItem = {
   status: UiStatus;
   ingested_chunks?: number | null;
   error_message?: string | null;
+  created_at?: string;
 };
 
+const LS_KEY = "ingest_files_v1";
+
+/** localStorage から読み込み */
+function loadFiles(): FileItem[] {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed as FileItem[];
+  } catch {
+    return [];
+  }
+}
+
+/** localStorage へ保存 */
+function saveFiles(files: FileItem[]) {
+  localStorage.setItem(LS_KEY, JSON.stringify(files));
+}
+
+/** 疑似 ingest：少し待って done にする（チャンク数も適当につける） */
+async function fakeIngest(): Promise<{ ingested_chunks: number }> {
+  // 0.6〜1.4秒くらい適当に待つ
+  const ms = 600 + Math.floor(Math.random() * 800);
+  await new Promise((r) => setTimeout(r, ms));
+  // 適当なチャンク数
+  return { ingested_chunks: 5 + Math.floor(Math.random() * 20) };
+}
+
 export default function IngestPage() {
-  // ====== 一覧 state ======
   const [files, setFiles] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(false);
-
-  // ====== status表示 ======
   const [status, setStatus] = useState("");
 
-  // ====== 1) 一覧取得（GET /files） ======
+  /** 一覧取得（ローカル） */
   const fetchFiles = async () => {
-    const api = getApiBase();
-    console.log("[API_BASE]", api);
-
-    if (!api) {
-      setFiles([]);
-      setStatus(
-        "API_BASE が未設定です。frontend/.env.local を作成して NEXT_PUBLIC_API_BASE を設定し、npm run dev を再起動してください。"
-      );
-      return;
-    }
-
-    try {
-      const res = await fetch(`${api}/files`, { cache: "no-store" });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        console.log("[FILES] status =", res.status, res.statusText);
-        console.log("[FILES] body =", text);
-        setFiles([]);
-        return;
-      }
-
-      const data = await res.json();
-      const list = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.files)
-        ? data.files
-        : [];
-
-      const normalized: FileItem[] = list.map((x: any) => ({
-        id: Number(x.id),
-        filename: String(x.filename ?? ""),
-        status: normalizeStatusToUi(x.status ?? "pending"),
-        ingested_chunks: x.ingested_chunks ?? null,
-        error_message: x.error_message ?? null,
-      }));
-
-      setFiles(normalized);
-    } catch (e) {
-      console.error(e);
-      setFiles([]);
-    }
+    const list = loadFiles().sort((a, b) => b.id - a.id);
+    setFiles(list);
   };
 
-  /**
-   * ✅ 1件アップロード→（可能なら）自動取り込み までを1関数に分離
-   * 複数選択時はこれをループで呼ぶ
-   */
+  /** 1件アップロード（ローカル登録）＋疑似 ingest */
   const uploadOne = async (file: File) => {
-    const api = getApiBase();
-    if (!api) throw new Error("API_BASE missing");
+    const newId = Date.now(); // 簡易ID
+    const item: FileItem = {
+      id: newId,
+      filename: file.name,
+      status: "processing",
+      ingested_chunks: null,
+      error_message: null,
+      created_at: new Date().toISOString(),
+    };
 
-    // 1) Upload
-    const fd = new FormData();
-    fd.append("file", file);
+    // 追加
+    const next = [item, ...loadFiles()];
+    saveFiles(next);
+    setFiles(next);
 
-    const res = await fetch(`${api}/files`, {
-      method: "POST",
-      body: fd,
-    });
+    // 疑似 ingest
+    const r = await fakeIngest();
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Upload failed: ${res.status}\n${text}`);
-    }
+    const after = loadFiles().map((f) =>
+      f.id === newId ? { ...f, status: "done", ingested_chunks: r.ingested_chunks } : f
+    );
+    saveFiles(after);
+    setFiles(after);
 
-    const created = await res.json().catch(() => null);
-    const newId = created?.id;
-
-    // 2) 一覧更新（新規行が入る）
-    await fetchFiles();
-
-    // 3) id が取れた場合のみ ingest
-    if (typeof newId === "number") {
-      // UI上、処理中にする
-      setFiles((prev) =>
-        prev.map((f) => (f.id === newId ? { ...f, status: "processing" } : f))
-      );
-
-      const ingestRes = await fetch(`${api}/files/${newId}/ingest_local`, {
-        method: "POST",
-      });
-
-      if (!ingestRes.ok) {
-        const text = await ingestRes.text().catch(() => "");
-        throw new Error(`Ingest failed: ${ingestRes.status}\n${text}`);
-      }
-
-      const ingestData = await ingestRes.json().catch(() => ({} as any));
-      const chunks =
-        typeof ingestData?.ingested_chunks === "number"
-          ? ingestData.ingested_chunks
-          : null;
-
-      // UI反映（この行だけ done）
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === newId ? { ...f, status: "done", ingested_chunks: chunks } : f
-        )
-      );
-
-      return { id: newId, ingested_chunks: chunks };
-    }
-
-    // idが無ければここまで（アップロードは成功）
-    return { id: null as any, ingested_chunks: null as any };
+    return { id: newId, ingested_chunks: r.ingested_chunks };
   };
 
-  // ====== 2) ファイルアップロード（複数選択対応） ======
+  /** 複数アップロード */
   const uploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const api = getApiBase();
-    console.log("[API]", api);
-
-    if (!api) {
-      setStatus(
-        "API_BASE が未設定です。frontend/.env.local を作成して NEXT_PUBLIC_API_BASE を設定し、npm run dev を再起動してください。"
-      );
-      e.target.value = "";
-      return;
-    }
-
     const selected = Array.from(e.target.files ?? []);
     if (selected.length === 0) return;
 
-    // PDFだけに絞る（念のため）
     const pdfs = selected.filter(
       (f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")
     );
@@ -192,11 +100,9 @@ export default function IngestPage() {
     }
 
     setLoading(true);
-
     try {
       setStatus(`アップロード開始：${pdfs.length}件`);
 
-      // ✅ 1件ずつ順番に処理（バックエンドが単発想定でも安全）
       let ok = 0;
       let ng = 0;
 
@@ -205,131 +111,76 @@ export default function IngestPage() {
         setStatus(`(${i + 1}/${pdfs.length}) 処理中：${file.name}`);
 
         try {
-          const r = await uploadOne(file);
+          await uploadOne(file);
           ok++;
-          // 成功ログ（必要なら）
-          console.log("[UPLOAD OK]", file.name, r);
         } catch (err) {
-          ng++;
           console.error("[UPLOAD NG]", file.name, err);
+          ng++;
         }
       }
 
       setStatus(`完了：成功 ${ok}件 / 失敗 ${ng}件`);
       await fetchFiles();
-    } catch (err: any) {
-      console.error("[UPLOAD ERROR RAW]", err);
-      if (String(err?.message || "").includes("Failed to fetch")) {
-        setStatus(
-          "アップロードに失敗しました（Failed to fetch）。" +
-            "原因は多くの場合、①バックエンド未起動/ポート違い ②CORS です。" +
-            "ブラウザで http://127.0.0.1:8000/docs が開けるか確認してください。"
-        );
-      } else {
-        setStatus(
-          "アップロード/取り込みに失敗しました。詳細はコンソールログを確認してください。"
-        );
-      }
     } finally {
       setLoading(false);
-      // ✅ multiple の場合も選択状態をリセットするため空にする
       e.target.value = "";
     }
   };
 
-  // ====== 3) 再取り込み（POST /files/{id}/ingest_local） ======
+  /** 再取り込み（疑似） */
   const reingestFile = async (id: number) => {
-    const api = getApiBase();
-    console.log("[API]", api);
-
-    if (!api) {
-      setStatus(
-        "API_BASE が未設定です。frontend/.env.local を作成して NEXT_PUBLIC_API_BASE を設定し、npm run dev を再起動してください。"
-      );
-      return;
-    }
-
     setLoading(true);
     setStatus("再取り込み中…");
 
-    // UI上、処理中にする
-    setFiles((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, status: "processing" } : f))
-    );
+    // processing にする
+    const before = loadFiles().map((f) => (f.id === id ? { ...f, status: "processing" } : f));
+    saveFiles(before);
+    setFiles(before);
 
     try {
-      const res = await fetch(`${api}/files/${id}/ingest_local`, { method: "POST" });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Reingest failed: ${res.status}\n${text}`);
-      }
-
-      const data = await res.json().catch(() => ({} as any));
-      const chunks =
-        typeof data?.ingested_chunks === "number" ? data.ingested_chunks : null;
-
-      // UI反映
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === id ? { ...f, status: "done", ingested_chunks: chunks } : f
-        )
+      const r = await fakeIngest();
+      const after = loadFiles().map((f) =>
+        f.id === id ? { ...f, status: "done", ingested_chunks: r.ingested_chunks } : f
       );
+      saveFiles(after);
+      setFiles(after);
 
-      setStatus(`再取り込み完了${chunks != null ? `（${chunks} チャンク）` : ""}`);
-      await fetchFiles();
+      setStatus(`再取り込み完了（${r.ingested_chunks} チャンク）`);
     } catch (e) {
       console.error(e);
+      const after = loadFiles().map((f) => (f.id === id ? { ...f, status: "error" } : f));
+      saveFiles(after);
+      setFiles(after);
       setStatus("再取り込みに失敗しました。");
-      setFiles((prev) =>
-        prev.map((f) => (f.id === id ? { ...f, status: "error" } : f))
-      );
     } finally {
       setLoading(false);
     }
   };
 
-  // ====== 4) 削除（DELETE /files/{id}） ======
+  /** 削除（ローカル） */
   const deleteFile = async (id: number) => {
-    const api = getApiBase();
-    console.log("[API]", api);
-
-    if (!api) {
-      setStatus(
-        "API_BASE が未設定です。frontend/.env.local を作成して NEXT_PUBLIC_API_BASE を設定し、npm run dev を再起動してください。"
-      );
-      return;
-    }
-
     if (!confirm("このファイルを削除しますか？")) return;
 
     setLoading(true);
     try {
-      const res = await fetch(`${api}/files/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Delete failed: ${res.status}\n${text}`);
-      }
-      await fetchFiles();
+      const after = loadFiles().filter((f) => f.id !== id);
+      saveFiles(after);
+      setFiles(after);
       setStatus("削除しました。");
-    } catch (e) {
-      console.error(e);
-      setStatus("削除に失敗しました。");
     } finally {
       setLoading(false);
     }
   };
 
-  // ====== 初回 & ポーリング ======
   useEffect(() => {
     fetchFiles();
+    // 5秒ポーリングはローカルだと不要だけど、UI互換のため残すならOK
     const timer = setInterval(fetchFiles, 5000);
     return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* 背景の薄いグラデ（統一トーン） */}
       <div className="pointer-events-none fixed inset-0 opacity-45">
         <div className="absolute -top-40 left-10 h-96 w-96 rounded-full bg-fuchsia-500/30 blur-3xl" />
         <div className="absolute top-40 right-10 h-96 w-96 rounded-full bg-cyan-500/25 blur-3xl" />
@@ -337,14 +188,13 @@ export default function IngestPage() {
       </div>
 
       <div className="relative mx-auto w-full max-w-4xl px-4 py-8">
-        {/* Header */}
         <div className="mb-5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <BackButton />
             <div>
               <div className="text-xs text-zinc-400">Ingest</div>
               <h1 className="text-xl font-semibold tracking-tight">
-                ファイル管理（アップロード）
+                ファイル管理
               </h1>
             </div>
           </div>
@@ -354,16 +204,15 @@ export default function IngestPage() {
               files: {files.length}
             </span>
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-zinc-300">
-              poll: 5s
+              mode: local
             </span>
           </div>
         </div>
 
-        {/* Upload card */}
         <section className="mb-6 rounded-3xl border border-white/10 bg-white/5 p-5 backdrop-blur">
           <div className="mb-2 text-sm font-semibold">アップロード</div>
           <p className="text-sm text-zinc-400">
-            PDFをアップロードすると取り込み（インデックス化）対象として登録されます。
+            ※このページは「フロントだけ」で動作します（実際のインデックス化は行いません）。
           </p>
 
           <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -371,7 +220,7 @@ export default function IngestPage() {
               <input
                 type="file"
                 accept=".pdf"
-                multiple // ✅ 複数選択を有効化
+                multiple
                 onChange={uploadFile}
                 disabled={loading}
                 className="hidden"
@@ -379,9 +228,7 @@ export default function IngestPage() {
               ＋ ファイルを選択（複数可）
             </label>
 
-            <div className="text-xs text-zinc-400">
-              {loading ? "処理中…" : "PDFのみ対応"}
-            </div>
+            <div className="text-xs text-zinc-400">{loading ? "処理中…" : "PDFのみ対応"}</div>
           </div>
 
           {status && (
@@ -391,7 +238,6 @@ export default function IngestPage() {
           )}
         </section>
 
-        {/* List card */}
         <section className="rounded-3xl border border-white/10 bg-white/5 p-5 backdrop-blur">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="text-sm font-semibold">ファイル一覧</div>
@@ -416,12 +262,9 @@ export default function IngestPage() {
                   className="rounded-2xl border border-white/10 bg-black/30 p-4 hover:bg-black/40"
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    {/* Left */}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <div className="truncate text-sm font-semibold">
-                          {file.filename}
-                        </div>
+                        <div className="truncate text-sm font-semibold">{file.filename}</div>
                         <span className="text-xs text-zinc-500">#{file.id}</span>
                       </div>
 
@@ -433,7 +276,6 @@ export default function IngestPage() {
                       </div>
                     </div>
 
-                    {/* Right */}
                     <div className="flex items-center gap-2">
                       <StatusBadge status={file.status} />
 
@@ -464,9 +306,7 @@ export default function IngestPage() {
           )}
         </section>
 
-        <div className="mt-8 text-center text-xs text-zinc-500">
-          Ingest Dashboard
-        </div>
+        <div className="mt-8 text-center text-xs text-zinc-500">Ingest Dashboard</div>
       </div>
     </div>
   );

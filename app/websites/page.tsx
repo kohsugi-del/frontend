@@ -4,13 +4,17 @@ import { useEffect, useState } from "react";
 import StatusBadge from "@/components/StatusBadge";
 import BackButton from "@/components/BackButton";
 
+type SiteStatus = "pending" | "crawling" | "done" | "error";
+
 type Site = {
   id: number;
   url: string;
-  scope: string;
+  scope: "single" | "all";
   type: string;
-  status: "pending" | "crawling" | "done" | "error" | string;
+  status: SiteStatus | string;
   ingested_urls?: number | null;
+  error_message?: string | null;
+  created_at?: string;
 };
 
 type BulkResult = {
@@ -19,8 +23,64 @@ type BulkResult = {
   ng: { url: string; reason: string }[];
 };
 
+const LS_KEY = "sites_v1";
+
+function loadSites(): Site[] {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed as Site[];
+  } catch {
+    return [];
+  }
+}
+
+function saveSites(sites: Site[]) {
+  localStorage.setItem(LS_KEY, JSON.stringify(sites));
+}
+
+/** URLっぽい形に軽く正規化（末尾スラッシュを揃える等） */
+function normalizeUrl(u: string) {
+  let x = u.trim();
+  // 全角スペース除去など
+  x = x.replace(/\s+/g, "");
+  // 末尾スラッシュは「あり」に揃える（好みでなしでもOK）
+  // ただし "https://example.com" → "https://example.com/"
+  if (/^https?:\/\/[^/]+$/i.test(x)) x = x + "/";
+  return x;
+}
+
+/** ✅ URL抽出（改行 / スペース / タブ / カンマ区切りOK） */
+function parseUrls(text: string) {
+  const tokens = text
+    .split(/[\n\r\t ,]+/g)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(normalizeUrl);
+
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const t of tokens) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      unique.push(t);
+    }
+  }
+  return unique;
+}
+
+/** ✅ 疑似 ingest/crawl（少し待って done + ページ数を適当に付与） */
+async function fakeCrawl(): Promise<{ ingested_urls: number }> {
+  const ms = 900 + Math.floor(Math.random() * 1200);
+  await new Promise((r) => setTimeout(r, ms));
+  return { ingested_urls: 10 + Math.floor(Math.random() * 90) };
+}
+
 export default function WebSiteManagePage() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE;
+  // ✅ APIは使わない（フロントのみ）
+  // const API_BASE = process.env.NEXT_PUBLIC_API_BASE;
 
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(false);
@@ -28,186 +88,109 @@ export default function WebSiteManagePage() {
   // 追加用 state（単一）
   const [url, setUrl] = useState("");
 
-  // ✅ scope は「このURLのみ」が基本、2択のみ
+  // scope は2択
   const [scope, setScope] = useState<"single" | "all">("single");
 
-  // ✅ type はUIから消す（送信は固定）
+  // type は固定
   const FIXED_TYPE = "静的HTML";
 
   const [submitting, setSubmitting] = useState(false);
 
-  // ✅ 追加後に取り込み開始するか（任意）
+  // 追加後に取り込み開始するか
   const [autoIngest, setAutoIngest] = useState(false);
 
-  // ✅ 一括追加モード
+  // 一括追加
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkText, setBulkText] = useState("");
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
 
-  const api = (path: string) => {
-    if (!API_BASE) return "";
-    return `${API_BASE.replace(/\/$/, "")}${path}`;
-  };
-
-  // 一覧取得
+  /** 一覧取得（ローカル） */
   const fetchSites = async () => {
-    if (!API_BASE) {
-      console.log("NEXT_PUBLIC_API_BASE が未設定です");
-      setSites([]);
-      return;
-    }
-
-    try {
-      const res = await fetch(api("/sites"));
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        console.log("[SITES] status =", res.status, res.statusText);
-        console.log("[SITES] body =", text);
-        setSites([]);
-        return;
-      }
-
-      const data = await res.json();
-
-      const list: Site[] = Array.isArray(data)
-        ? data
-        : Array.isArray((data as any)?.sites)
-        ? (data as any).sites
-        : Array.isArray((data as any)?.items)
-        ? (data as any).items
-        : Array.isArray((data as any)?.data)
-        ? (data as any).data
-        : [];
-
-      setSites(list);
-    } catch (e) {
-      console.error(e);
-      setSites([]);
-    }
+    const list = loadSites().sort((a, b) => b.id - a.id);
+    setSites(list);
   };
 
-  /**
-   * ✅ 取り込み開始（サイト用）
-   * - 本命: POST /sites/{id}/reingest_local
-   * - 互換: POST /sites/{id}/reingest
-   */
+  /** 取り込み開始（ローカルで擬似） */
   const startIngest = async (id: number) => {
-    if (!API_BASE) return;
-
     setLoading(true);
-
-    const candidates = [
-      `/sites/${id}/reingest_local`,
-      `/sites/${id}/reingest`,
-    ];
-
     try {
-      let lastErr: unknown = null;
+      // crawling にする
+      const before = loadSites().map((s) =>
+        s.id === id ? { ...s, status: "crawling", error_message: null } : s
+      );
+      saveSites(before);
+      setSites(before);
 
-      for (const path of candidates) {
-        const fullUrl = api(path);
+      // 疑似 crawl
+      const r = await fakeCrawl();
 
-        const res = await fetch(fullUrl, { method: "POST" });
-        if (res.ok) {
-          await fetchSites();
-          return;
-        }
-
-        const text = await res.text().catch(() => "");
-        if (res.status === 404 || res.status === 405) {
-          lastErr = new Error(`POST ${fullUrl} => ${res.status}\n${text}`);
-          continue;
-        }
-        throw new Error(`POST ${fullUrl} => ${res.status}\n${text}`);
-      }
-
-      throw lastErr ?? new Error("All ingest endpoints failed");
+      // done にして反映
+      const after = loadSites().map((s) =>
+        s.id === id
+          ? { ...s, status: "done", ingested_urls: r.ingested_urls }
+          : s
+      );
+      saveSites(after);
+      setSites(after);
     } catch (e) {
       console.error(e);
-      alert("取り込み開始に失敗しました（Console / Network を確認してください）");
+      const after = loadSites().map((s) =>
+        s.id === id
+          ? { ...s, status: "error", error_message: "擬似取り込みに失敗しました" }
+          : s
+      );
+      saveSites(after);
+      setSites(after);
+      alert("取り込み開始に失敗しました（Console を確認してください）");
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ URL抽出（改行 / スペース / タブ / カンマ区切りを許容）
-  const parseUrls = (text: string) => {
-    const tokens = text
-      .split(/[\n\r\t ,]+/g)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const seen = new Set<string>();
-    const unique: string[] = [];
-    for (const t of tokens) {
-      if (!seen.has(t)) {
-        seen.add(t);
-        unique.push(t);
-      }
-    }
-    return unique;
-  };
-
-  // Webサイト追加（単一）
+  /** 追加（単一） */
   const addSite = async () => {
-    const u = url.trim();
+    const u = normalizeUrl(url);
     if (!u) return;
-
-    if (!API_BASE) {
-      alert("NEXT_PUBLIC_API_BASE が未設定です");
-      return;
-    }
 
     setSubmitting(true);
     setBulkResult(null);
 
     try {
-      const res = await fetch(api("/sites"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // ✅ type は固定で送る
-        body: JSON.stringify({ url: u, scope, type: FIXED_TYPE }),
-      });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`POST /sites failed: ${res.status}\n${text}`);
+      // 重複チェック
+      const current = loadSites();
+      if (current.some((s) => normalizeUrl(s.url) === u)) {
+        alert("同じURLが既に登録されています。");
+        return;
       }
 
-      let createdId: number | null = null;
-      try {
-        const data = await res.json().catch(() => null);
-        const id1 = (data as any)?.id;
-        const id2 = (data as any)?.site?.id;
-        const id3 = (data as any)?.data?.id;
-        if (typeof id1 === "number") createdId = id1;
-        else if (typeof id2 === "number") createdId = id2;
-        else if (typeof id3 === "number") createdId = id3;
-      } catch {}
+      const newId = Date.now(); // 簡易ID
+      const site: Site = {
+        id: newId,
+        url: u,
+        scope,
+        type: FIXED_TYPE,
+        status: autoIngest ? "crawling" : "pending",
+        ingested_urls: null,
+        created_at: new Date().toISOString(),
+      };
 
+      const next = [site, ...current];
+      saveSites(next);
+      setSites(next);
       setUrl("");
 
-      if (autoIngest && createdId != null) {
-        await startIngest(createdId);
+      if (autoIngest) {
+        await startIngest(newId);
       } else {
         await fetchSites();
       }
-    } catch (e) {
-      console.error(e);
-      alert("サイト追加に失敗しました（Console / Network を確認してください）");
     } finally {
       setSubmitting(false);
     }
   };
 
-  // ✅ Webサイト追加（一括）
+  /** 追加（一括） */
   const addSitesBulk = async () => {
-    if (!API_BASE) {
-      alert("NEXT_PUBLIC_API_BASE が未設定です");
-      return;
-    }
-
     const urls = parseUrls(bulkText);
     if (urls.length === 0) return;
 
@@ -215,86 +198,77 @@ export default function WebSiteManagePage() {
     setBulkResult(null);
 
     try {
-      const results = await Promise.allSettled(
-        urls.map(async (u) => {
-          const res = await fetch(api("/sites"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            // ✅ type は固定で送る
-            body: JSON.stringify({ url: u, scope, type: FIXED_TYPE }),
-          });
-
-          if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(
-              `POST /sites failed: ${res.status} ${res.statusText}\n${text}`
-            );
-          }
-
-          let createdId: number | null = null;
-          try {
-            const data = await res.json().catch(() => null);
-            const id1 = (data as any)?.id;
-            const id2 = (data as any)?.site?.id;
-            const id3 = (data as any)?.data?.id;
-            if (typeof id1 === "number") createdId = id1;
-            else if (typeof id2 === "number") createdId = id2;
-            else if (typeof id3 === "number") createdId = id3;
-          } catch {}
-
-          return { url: u, id: createdId };
-        })
-      );
+      const current = loadSites();
+      const currentSet = new Set(current.map((s) => normalizeUrl(s.url)));
 
       const ok: BulkResult["ok"] = [];
       const ng: BulkResult["ng"] = [];
 
-      for (let i = 0; i < results.length; i++) {
-        const u = urls[i];
-        const r = results[i];
-        if (r.status === "fulfilled") ok.push(r.value);
-        else
-          ng.push({
-            url: u,
-            reason: String(r.reason?.message ?? r.reason ?? "unknown"),
-          });
+      // まず登録
+      const now = Date.now();
+      let seq = 0;
+
+      const added: Site[] = [];
+
+      for (const u0 of urls) {
+        const u = normalizeUrl(u0);
+        if (!/^https?:\/\//i.test(u)) {
+          ng.push({ url: u0, reason: "URLが http(s) ではありません" });
+          continue;
+        }
+        if (currentSet.has(u)) {
+          ng.push({ url: u, reason: "既に登録済み" });
+          continue;
+        }
+
+        const id = now + seq++;
+        currentSet.add(u);
+
+        added.push({
+          id,
+          url: u,
+          scope,
+          type: FIXED_TYPE,
+          status: autoIngest ? "crawling" : "pending",
+          ingested_urls: null,
+          created_at: new Date().toISOString(),
+        });
+
+        ok.push({ url: u, id });
       }
 
-      setBulkResult({ total: urls.length, ok, ng });
+      const next = [...added, ...current];
+      saveSites(next);
+      setSites(next);
 
+      setBulkResult({ total: urls.length, ok, ng });
+      setBulkText("");
+
+      // auto ingest なら順に実行（UIが分かりやすい）
       if (autoIngest) {
-        const ids = ok.map((x) => x.id).filter((v): v is number => typeof v === "number");
+        const ids = ok
+          .map((x) => x.id)
+          .filter((v): v is number => typeof v === "number");
         for (const id of ids) {
           await startIngest(id);
         }
       } else {
         await fetchSites();
       }
-
-      setBulkText("");
-    } catch (e) {
-      console.error(e);
-      alert("一括追加に失敗しました（Console / Network を確認してください）");
     } finally {
       setSubmitting(false);
     }
   };
 
+  /** 削除（ローカル） */
   const deleteSite = async (id: number) => {
-    if (!API_BASE) return;
     if (!confirm("このWebサイトを削除しますか？")) return;
 
     setLoading(true);
     try {
-      const res = await fetch(api(`/sites/${id}`), { method: "DELETE" });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`DELETE /sites/${id} failed: ${res.status}\n${text}`);
-      }
-      await fetchSites();
-    } catch (e) {
-      console.error(e);
-      alert("削除に失敗しました（Console / Network を確認してください）");
+      const after = loadSites().filter((s) => s.id !== id);
+      saveSites(after);
+      setSites(after);
     } finally {
       setLoading(false);
     }
@@ -302,10 +276,10 @@ export default function WebSiteManagePage() {
 
   useEffect(() => {
     fetchSites();
+    // ローカルならポーリング不要だけど、UI互換で残すならOK
     const timer = setInterval(fetchSites, 5000);
     return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [API_BASE]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -321,7 +295,9 @@ export default function WebSiteManagePage() {
             <BackButton />
             <div>
               <div className="text-xs text-zinc-400">Sites</div>
-              <h1 className="text-xl font-semibold tracking-tight">Webサイト管理</h1>
+              <h1 className="text-xl font-semibold tracking-tight">
+                Webサイト管理（フロントのみ動作）
+              </h1>
             </div>
           </div>
 
@@ -330,16 +306,10 @@ export default function WebSiteManagePage() {
               sites: {sites.length}
             </span>
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-zinc-300">
-              poll: 5s
+              mode: local
             </span>
           </div>
         </div>
-
-        {!API_BASE && (
-          <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-            NEXT_PUBLIC_API_BASE が未設定です（.env.local を確認して Next.js を再起動）
-          </div>
-        )}
 
         {/* Add site card */}
         <section className="mb-6 rounded-3xl border border-white/10 bg-white/5 p-5 backdrop-blur">
@@ -347,7 +317,7 @@ export default function WebSiteManagePage() {
             <div>
               <div className="text-sm font-semibold">新しいWebサイトを追加</div>
               <p className="text-sm text-zinc-400">
-                URL・対象範囲を指定して登録します（基本は「このURLのみ」）。
+                ※このページは「フロントだけ」で動作します（実際のクロールは行いません）。
               </p>
             </div>
 
@@ -381,7 +351,6 @@ export default function WebSiteManagePage() {
               />
             )}
 
-            {/* ✅ scope は2択のみ（デフォルト single） */}
             <div className="grid gap-2 sm:grid-cols-2">
               <select
                 value={scope}
@@ -392,7 +361,6 @@ export default function WebSiteManagePage() {
                 <option value="all">配下すべて</option>
               </select>
 
-              {/* 右側は空きスペースにして見た目を揃える（不要なら消してOK） */}
               <div className="hidden sm:block" />
             </div>
 
@@ -403,12 +371,12 @@ export default function WebSiteManagePage() {
                 onChange={(e) => setAutoIngest(e.target.checked)}
                 className="h-4 w-4"
               />
-              追加後に取り込み開始する（id が返る場合のみ）
+              追加後に「擬似取り込み」を開始する
             </label>
 
             <button
               onClick={bulkMode ? addSitesBulk : addSite}
-              disabled={submitting || !API_BASE}
+              disabled={submitting}
               className="w-full rounded-xl bg-white px-4 py-2 text-sm font-semibold text-zinc-900 hover:opacity-90 disabled:opacity-60"
             >
               {submitting
@@ -447,8 +415,6 @@ export default function WebSiteManagePage() {
                 )}
               </div>
             )}
-
-            <div className="text-xs text-zinc-400">※ API が未設定の場合は追加できません</div>
           </div>
         </section>
 
@@ -458,7 +424,7 @@ export default function WebSiteManagePage() {
             <div className="text-sm font-semibold">登録済みWebサイト一覧</div>
             <button
               onClick={fetchSites}
-              disabled={loading || !API_BASE}
+              disabled={loading}
               className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
             >
               {loading ? "更新中…" : "更新"}
@@ -484,12 +450,14 @@ export default function WebSiteManagePage() {
                       </div>
 
                       <div className="mt-1 text-xs text-zinc-400">
-                        {/* ✅ type は固定だが、一覧表示はそのままでもOK（不要なら消してOK） */}
                         {site.type} / {site.scope}
                         {site.ingested_urls != null && site.status === "done" && (
                           <span className="ml-2 text-emerald-300">
                             ・{site.ingested_urls}ページ取り込み
                           </span>
+                        )}
+                        {site.error_message && (
+                          <span className="ml-2 text-red-200">・{site.error_message}</span>
                         )}
                       </div>
                     </div>
@@ -499,9 +467,9 @@ export default function WebSiteManagePage() {
 
                       <button
                         onClick={() => startIngest(site.id)}
-                        disabled={loading || !API_BASE || site.status === "crawling"}
+                        disabled={loading || site.status === "crawling"}
                         className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
-                        title="取り込み開始"
+                        title="取り込み開始（擬似）"
                       >
                         ▶ 取
                       </button>
@@ -509,9 +477,9 @@ export default function WebSiteManagePage() {
                       {(site.status === "done" || site.status === "error") && (
                         <button
                           onClick={() => startIngest(site.id)}
-                          disabled={loading || !API_BASE}
+                          disabled={loading}
                           className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs hover:bg-white/10 disabled:opacity-60"
-                          title="再取り込み"
+                          title="再取り込み（擬似）"
                         >
                           🔄 再
                         </button>
@@ -519,7 +487,7 @@ export default function WebSiteManagePage() {
 
                       <button
                         onClick={() => deleteSite(site.id)}
-                        disabled={loading || !API_BASE}
+                        disabled={loading}
                         className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200 hover:bg-red-500/15 disabled:opacity-60"
                         title="削除"
                       >

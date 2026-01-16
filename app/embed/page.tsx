@@ -23,18 +23,8 @@ export default function EmbedPage() {
     setThinking(true);
 
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE;
-
-      if (!API_BASE) {
-        throw new Error(
-          "NEXT_PUBLIC_API_BASE が未設定です（.env.local / Vercel環境変数を確認）"
-        );
-      }
-
-      const base = API_BASE.replace(/\/$/, "");
-      const url = `${base}/embed`;
-
-      const res = await fetch(url, {
+      // ✅ Vercel内の API Route を叩く（同一ドメイン）
+      const res = await fetch("/api/embed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q }),
@@ -42,15 +32,10 @@ export default function EmbedPage() {
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        console.log("[API ERROR] url =", url);
-        console.log("[API ERROR] status =", res.status, res.statusText);
-        console.log("[API ERROR] body =", text);
-
         throw new Error(`API error: ${res.status} ${res.statusText}\n${text}`);
       }
 
-      const data: any = await res.json();
-
+      const data: any = await res.json().catch(() => ({}));
       const answer =
         data?.answer ??
         data?.message ??
@@ -88,12 +73,10 @@ export default function EmbedPage() {
         overflow-hidden
       "
     >
-      {/* ヘッダー */}
       <div className="h-12 flex items-center justify-center border-b border-white/10 text-sm font-semibold">
         AI Assistant
       </div>
 
-      {/* メッセージエリア */}
       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-2">
         {messages.map((m, i) => (
           <ChatBubble key={i} role={m.role}>
@@ -108,7 +91,6 @@ export default function EmbedPage() {
         )}
       </div>
 
-      {/* 入力欄 */}
       <div className="p-3 border-t border-white/10 flex gap-2">
         <input
           className="
